@@ -534,7 +534,8 @@ input[type="checkbox"] {
 }
 
 .map-status,
-.feedback {
+.feedback,
+.map-zoom {
   background: rgba(15, 27, 24, 0.9);
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -556,6 +557,22 @@ input[type="checkbox"] {
   text-align: center;
   transform: translateX(-50%);
   width: max-content;
+}
+
+.map-zoom {
+  display: flex;
+  gap: 6px;
+  left: 16px;
+  padding: 8px;
+  top: 16px;
+}
+
+.map-zoom button {
+  background: rgba(255, 255, 255, 0.1);
+  font-weight: 900;
+  min-height: 34px;
+  min-width: 38px;
+  padding: 6px 10px;
 }
 
 .score-dock {
@@ -692,5 +709,3 @@ input[type="checkbox"] {
     font-size: 36px;
   }
 }
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--ink);
