@@ -466,9 +466,20 @@ async function joinOnlineRoom(event) {
     }
     const data = normalizeRoom(room);
     if (data.status !== "lobby") {
-      setOnlineMessage("Partie déjà lancée");
-      setRoomHelp("Cette room est déjà en jeu. Crée une nouvelle room pour rejoindre depuis le début.");
-      return;
+      data.status = "lobby";
+      data.screen = "room";
+      data.started = false;
+      data.target = null;
+      data.answered = false;
+      data.updatedAt = Date.now();
+      await window.GeoDuelFirebase.patchRoom(roomId, {
+        status: data.status,
+        screen: data.screen,
+        started: data.started,
+        target: data.target,
+        answered: data.answered,
+        updatedAt: data.updatedAt
+      });
     }
     state.roomId = roomId;
     state.online = true;
