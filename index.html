@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Geo Duel</title>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="game-shell">
+      <section class="playfield" aria-label="Carte du monde interactive">
+        <div class="map-topbar">
+          <div class="brand-lockup">
+            <span class="brand-mark">GD</span>
+            <div>
+              <h1>Geo Duel</h1>
+              <p>Place le pays le plus vite possible.</p>
+            </div>
+          </div>
+          <div class="round-chip">
+            <span id="roundLabel">Round 1/10</span>
+            <strong id="timerLabel">20.0s</strong>
+          </div>
+        </div>
+
+        <div class="map-card">
+          <svg id="worldMap" role="img" aria-label="Carte du monde"></svg>
+          <div id="mapStatus" class="map-status">Chargement de la carte...</div>
+        </div>
+      </section>
+
+      <aside class="control-panel">
+        <section class="panel hero-panel">
+          <img src="./assets/world-arena.png" alt="" />
+          <div>
+            <p class="eyebrow">Partie rapide</p>
+            <h2 id="promptTitle">Pret ?</h2>
+            <p id="promptHint">Ajoute des joueurs, choisis les modes, puis lance une partie.</p>
+          </div>
+        </section>
+
+        <section class="panel setup-panel">
+          <div class="panel-title">
+            <h3>Joueurs</h3>
+            <span id="playerCount">2</span>
+          </div>
+          <div id="playersList" class="players-list"></div>
+          <form id="addPlayerForm" class="inline-form">
+            <input id="playerName" type="text" autocomplete="off" maxlength="16" placeholder="Nom du joueur" />
+            <button type="submit" title="Ajouter">+</button>
+          </form>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">
+            <h3>Modes</h3>
+            <span id="modeSummary">Mix</span>
+          </div>
+          <div class="toggles">
+            <label><input type="checkbox" value="flag" checked /> Drapeau</label>
+            <label><input type="checkbox" value="capital" checked /> Capitale</label>
+            <label><input type="checkbox" value="name" checked /> Nom</label>
+          </div>
+          <div class="settings-row">
+            <label for="roundsInput">Rounds</label>
+            <input id="roundsInput" type="number" min="3" max="30" value="10" />
+          </div>
+        </section>
+
+        <section class="panel action-panel">
+          <button id="startGame" class="primary">Lancer</button>
+          <button id="nextRound" disabled>Valider / suivant</button>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">
+            <h3>Scores</h3>
+            <span id="currentTurn">Tour de Nina</span>
+          </div>
+          <ol id="scoreboard" class="scoreboard"></ol>
+        </section>
+
+        <section class="panel result-panel">
+          <div class="result-grid">
+            <div>
+              <span>Precision</span>
+              <strong id="distanceLabel">-</strong>
+            </div>
+            <div>
+              <span>Points</span>
+              <strong id="pointsLabel">-</strong>
+            </div>
+          </div>
+          <p id="feedback">Clique sur la carte pour placer ton marqueur.</p>
+        </section>
+      </aside>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+    <script src="./countries.js"></script>
+    <script src="./firebase-adapter.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>
