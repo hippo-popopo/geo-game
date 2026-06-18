@@ -14,26 +14,19 @@ Puis ouvrir `http://localhost:5174/geo-duel/`.
 
 - 1 a plusieurs joueurs en local.
 - Modes melanges : drapeau, capitale, nom.
-- Score = precision geographique + bonus de rapidite.
-- Le marqueur rouge est la reponse du joueur, le point jaune est la position attendue.
+- Score = 100 points si le pays clique est le bon, plus 10 points par seconde restante.
+- Mauvais pays ou temps ecoule = 0 point.
 - Les joueurs jouent chacun leur tour, puis le plus gros score gagne.
 
-## Pret pour Firebase
+## Rooms online
 
-Le fichier `firebase-adapter.js` utilise la Realtime Database :
+Le systeme online reprend le modele de `tempo-heist` :
 
-```text
-https://geo-game-4f27f-default-rtdb.europe-west1.firebasedatabase.app/
-```
-
-Les rooms online fonctionnent avec un lien du type `?room=ABCD`.
-
-Deja branche :
-
-- creation/rejoindre une room ;
-- synchronisation de l'etat de partie ;
-- lien partageable ;
-- reprise automatique d'une room depuis l'URL.
+- `firebase-config.js` contient l'URL Realtime Database.
+- Les rooms sont stockees dans `/geo-duel/rooms/CODE`.
+- Chaque joueur a un `playerId` local en `sessionStorage`.
+- L'hote cree la room, partage le code, puis lance la partie.
+- Les autres rejoignent avec le code et suivent l'etat par polling.
 
 Encore a durcir avant publication large :
 

@@ -1,15 +1,17 @@
-const WORLD_GEOJSON_URL = "https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json";
-const STORAGE_KEY = "geo-duel-state-v1";
+const WORLD_GEOJSON_URL = "https://raw.githubusercontent.com/holtzy/D3-graph-gallery/master/DATA/world.geojson";
+const STORAGE_KEY = "geo-duel-state-v2";
 const MAX_SECONDS = 20;
+const BASE_POINTS = 100;
+const SPEED_MULTIPLIER = 10;
 
-if ("scrollRestoration" in history) {
-  history.scrollRestoration = "manual";
-}
-window.scrollTo(0, 0);
-window.addEventListener("pageshow", () => setTimeout(() => window.scrollTo(0, 0), 0));
-window.addEventListener("load", () => setTimeout(() => window.scrollTo(0, 0), 0));
+if ("scrollRestoration" in history) history.scrollRestoration = "manual";
+
+const countries = window.GEO_DUEL_COUNTRIES;
+const onlinePlayerId = sessionStorage.getItem("geoDuelPlayer") || crypto.randomUUID();
+sessionStorage.setItem("geoDuelPlayer", onlinePlayerId);
 
 const state = {
+  screen: "setup",
   players: [
     { id: crypto.randomUUID(), name: "Nina", score: 0 },
     { id: crypto.randomUUID(), name: "Leo", score: 0 }
@@ -20,108 +22,116 @@ const state = {
   turn: 0,
   target: null,
   promptMode: "name",
-  guess: null,
+  selectedCountry: null,
   answered: false,
   started: false,
   endsAt: 0,
-  timerId: null,
   usedTargets: [],
+  lastPoints: 0,
   roomId: null,
   online: false,
-  lastRemoteUpdate: 0
+  lastRemoteUpdate: 0,
+  timerId: null
 };
 
 const els = {
+  setupScreen: document.querySelector("#setupScreen"),
+  roomScreen: document.querySelector("#roomScreen"),
+  gameScreen: document.querySelector("#gameScreen"),
+  resultScreen: document.querySelector("#resultScreen"),
   svg: d3.select("#worldMap"),
   mapStatus: document.querySelector("#mapStatus"),
   promptTitle: document.querySelector("#promptTitle"),
   promptHint: document.querySelector("#promptHint"),
   roundLabel: document.querySelector("#roundLabel"),
   timerLabel: document.querySelector("#timerLabel"),
-  playersList: document.querySelector("#playersList"),
-  playerCount: document.querySelector("#playerCount"),
-  addPlayerForm: document.querySelector("#addPlayerForm"),
   playerName: document.querySelector("#playerName"),
   createRoom: document.querySelector("#createRoom"),
   joinRoomForm: document.querySelector("#joinRoomForm"),
   roomCode: document.querySelector("#roomCode"),
   onlineStatus: document.querySelector("#onlineStatus"),
-  roomShare: document.querySelector("#roomShare"),
-  roomLink: document.querySelector("#roomLink"),
-  copyRoomLink: document.querySelector("#copyRoomLink"),
+  roomHelp: document.querySelector("#roomHelp"),
+  roomCodeDisplay: document.querySelector("#roomCodeDisplay"),
+  roomPlayerCount: document.querySelector("#roomPlayerCount"),
+  roomPlayersList: document.querySelector("#roomPlayersList"),
+  roomHostBadge: document.querySelector("#roomHostBadge"),
+  copyRoomCode: document.querySelector("#copyRoomCode"),
+  roomLobbyMessage: document.querySelector("#roomLobbyMessage"),
+  leaveRoom: document.querySelector("#leaveRoom"),
+  launchRoomGame: document.querySelector("#launchRoomGame"),
   modeSummary: document.querySelector("#modeSummary"),
   modeInputs: document.querySelectorAll(".toggles input"),
   roundsInput: document.querySelector("#roundsInput"),
   startGame: document.querySelector("#startGame"),
-  nextRound: document.querySelector("#nextRound"),
+  gameMenu: document.querySelector("#gameMenu"),
+  backToSetup: document.querySelector("#backToSetup"),
+  rematchGame: document.querySelector("#rematchGame"),
   currentTurn: document.querySelector("#currentTurn"),
   scoreboard: document.querySelector("#scoreboard"),
-  distanceLabel: document.querySelector("#distanceLabel"),
+  finalScoreboard: document.querySelector("#finalScoreboard"),
   pointsLabel: document.querySelector("#pointsLabel"),
-  feedback: document.querySelector("#feedback")
+  feedback: document.querySelector("#feedback"),
+  winnerTitle: document.querySelector("#winnerTitle")
 };
 
 let projection = d3.geoNaturalEarth1();
 let path = d3.geoPath(projection);
-let countriesGroup;
-let overlayGroup;
 let countryFeatures = [];
+let countryLayer = null;
+let overlayLayer = null;
 let unsubscribeRoom = null;
+let roomPollTimer = null;
+let roomData = null;
+let isHost = false;
 let suppressPublish = false;
 
 restoreState();
-renderPlayers();
-renderSetup();
-renderScoreboard();
+bindEvents();
+renderAll();
 loadMap();
 autoJoinRoomFromUrl();
 
-window.addEventListener("resize", () => drawMap(countryFeatures));
-els.addPlayerForm.addEventListener("submit", addPlayer);
-els.createRoom.addEventListener("click", createOnlineRoom);
-els.joinRoomForm.addEventListener("submit", joinOnlineRoom);
-els.copyRoomLink.addEventListener("click", copyRoomLink);
-els.startGame.addEventListener("click", startGame);
-els.nextRound.addEventListener("click", nextRound);
-els.roundsInput.addEventListener("change", () => {
-  state.rounds = clamp(Number(els.roundsInput.value) || 10, 3, 30);
-  els.roundsInput.value = state.rounds;
-  saveState();
-  renderSetup();
-});
-els.modeInputs.forEach((input) => {
-  input.addEventListener("change", () => {
-    const selected = [...els.modeInputs].filter((item) => item.checked).map((item) => item.value);
-    if (!selected.length) {
-      input.checked = true;
-      return;
-    }
-    state.modes = selected;
-    saveState();
-    renderSetup();
+function bindEvents() {
+  window.addEventListener("resize", () => drawMap(countryFeatures));
+  els.createRoom.addEventListener("click", createOnlineRoom);
+  els.joinRoomForm.addEventListener("submit", joinOnlineRoom);
+  els.copyRoomCode.addEventListener("click", copyRoomCode);
+  els.leaveRoom.addEventListener("click", returnToSetup);
+  els.launchRoomGame.addEventListener("click", startGame);
+  els.startGame.addEventListener("click", startGame);
+  els.gameMenu.addEventListener("click", returnToSetup);
+  els.rematchGame.addEventListener("click", startGame);
+  els.backToSetup.addEventListener("click", returnToSetup);
+  els.roundsInput.addEventListener("change", () => {
+    state.rounds = clamp(Number(els.roundsInput.value) || 10, 3, 30);
+    renderAll();
     syncState();
   });
-});
+  els.modeInputs.forEach((input) => {
+    input.addEventListener("change", () => {
+      const selected = [...els.modeInputs].filter((item) => item.checked).map((item) => item.value);
+      if (!selected.length) {
+        input.checked = true;
+        return;
+      }
+      state.modes = selected;
+      renderAll();
+      syncState();
+    });
+  });
+}
 
 async function loadMap() {
   try {
-    const [topojson] = await Promise.all([
-      import("https://cdn.jsdelivr.net/npm/topojson-client@3/+esm"),
-      waitForD3()
-    ]);
     const response = await fetch(WORLD_GEOJSON_URL);
-    const topology = await response.json();
-    countryFeatures = topojson.feature(topology, topology.objects.countries).features;
+    const geojson = await response.json();
+    countryFeatures = geojson.features;
     els.mapStatus.hidden = true;
     drawMap(countryFeatures);
-  } catch (error) {
-    els.mapStatus.textContent = "Carte indisponible hors ligne. Recharge avec internet pour afficher les frontieres.";
+  } catch {
+    els.mapStatus.textContent = "Carte indisponible hors ligne. Recharge avec internet.";
     drawMap([]);
   }
-}
-
-function waitForD3() {
-  return window.d3 ? Promise.resolve() : new Promise((resolve) => window.addEventListener("load", resolve, { once: true }));
 }
 
 function drawMap(features) {
@@ -130,72 +140,73 @@ function drawMap(features) {
   const width = Math.max(bounds.width, 320);
   const height = Math.max(bounds.height, 260);
   els.svg.attr("viewBox", `0 0 ${width} ${height}`);
-  projection.fitExtent([[18, 18], [width - 18, height - 18]], { type: "Sphere" });
+  projection.fitExtent([[12, 14], [width - 12, height - 14]], { type: "Sphere" });
   path = d3.geoPath(projection);
   els.svg.selectAll("*").remove();
 
   els.svg.append("path").datum({ type: "Sphere" }).attr("class", "sphere").attr("d", path);
   els.svg.append("path").datum(d3.geoGraticule10()).attr("class", "graticule").attr("d", path);
-  countriesGroup = els.svg.append("g").attr("class", "countries");
-  overlayGroup = els.svg.append("g").attr("class", "overlays");
+  countryLayer = els.svg.append("g").attr("class", "countries");
+  overlayLayer = els.svg.append("g").attr("class", "overlays");
 
-  countriesGroup
+  countryLayer
     .selectAll("path")
     .data(features)
     .join("path")
-    .attr("class", "country")
-    .attr("d", path);
-
-  els.svg.on("click", (event) => {
-    if (!state.started || state.answered || !state.target) return;
-    const [x, y] = d3.pointer(event, els.svg.node());
-    const lonLat = projection.invert([x, y]);
-    if (!lonLat) return;
-    placeGuess(lonLat);
-  });
+    .attr("class", (feature) => `country ${state.answered && isTargetFeature(feature) ? "is-answer" : ""}`)
+    .attr("data-country", (feature) => getFeatureName(feature))
+    .attr("d", path)
+    .on("click", (event, feature) => handleCountryClick(feature));
 
   redrawOverlay();
 }
 
-function addPlayer(event) {
-  event.preventDefault();
-  const name = els.playerName.value.trim();
-  if (!name) return;
-  state.players.push({ id: crypto.randomUUID(), name, score: 0 });
-  els.playerName.value = "";
-  saveState();
-  renderPlayers();
-  renderScoreboard();
-  renderSetup();
-  syncState();
+function startGame() {
+  if (state.online && state.roomId && !isHost) {
+    setRoomHelp("Seul l’hôte peut lancer la partie. Attends que la room démarre.");
+    return;
+  }
+  if (state.online && state.roomId && isHost) {
+    launchOnlineGame();
+    return;
+  }
+  startLocalGame();
 }
 
-function startGame() {
+function startLocalGame() {
   window.scrollTo(0, 0);
-  state.players.forEach((player) => {
-    player.score = 0;
-  });
+  state.players = [{ id: onlinePlayerId, name: ownOnlineName(), score: 0 }];
+  state.screen = "game";
+  state.started = true;
   state.round = 0;
   state.turn = 0;
   state.usedTargets = [];
-  state.started = true;
-  els.startGame.textContent = "Recommencer";
-  nextRound();
-  syncState();
+  startNextTurn();
 }
 
-function nextRound() {
+function returnToSetup() {
+  clearInterval(state.timerId);
+  clearInterval(roomPollTimer);
+  state.screen = "setup";
+  state.started = false;
+  state.target = null;
+  state.answered = false;
+  state.selectedCountry = null;
+  state.lastPoints = 0;
+  state.roomId = null;
+  state.online = false;
+  const cleanUrl = new URL(location.href);
+  cleanUrl.searchParams.delete("room");
+  history.replaceState({}, "", cleanUrl);
+  roomData = null;
+  isHost = false;
+  renderAll();
+}
+
+function startNextTurn() {
   if (!state.started) return;
-  if (state.answered) {
-    state.turn = (state.turn + 1) % state.players.length;
-  }
-  if (state.round >= state.rounds && state.turn === 0 && state.answered) {
-    finishGame();
-    return;
-  }
-  if (!state.answered || state.turn === 0) {
-    state.round += 1;
-  }
+  const isNewRound = state.turn === 0;
+  if (isNewRound) state.round += 1;
   if (state.round > state.rounds) {
     finishGame();
     return;
@@ -205,37 +216,44 @@ function nextRound() {
   state.target = sample(pool.length ? pool : countries);
   state.usedTargets.push(state.target.name);
   state.promptMode = sample(state.modes);
-  state.guess = null;
+  state.selectedCountry = null;
   state.answered = false;
+  state.lastPoints = possiblePoints();
   state.endsAt = Date.now() + MAX_SECONDS * 1000;
-  els.nextRound.disabled = true;
-  els.distanceLabel.textContent = "-";
-  els.pointsLabel.textContent = "-";
-  els.feedback.textContent = "Clique sur la carte pour placer ton marqueur.";
-  renderPrompt();
-  renderSetup();
-  renderScoreboard();
-  redrawOverlay();
+  renderAll();
   tickTimer();
   syncState();
 }
 
-function placeGuess([lon, lat]) {
+function handleCountryClick(feature) {
+  if (!state.started || state.screen !== "game" || state.answered || !state.target) return;
+  if (state.online && state.players[state.turn]?.id !== onlinePlayerId) return;
+  const clickedName = getFeatureName(feature);
+  const correct = isTargetFeature(feature);
   const secondsLeft = Math.max(0, (state.endsAt - Date.now()) / 1000);
-  const distance = haversineKm(lat, lon, state.target.lat, state.target.lon);
-  const precision = Math.max(0, 1000 - distance);
-  const speedBonus = Math.round(secondsLeft * 18);
-  const points = Math.round(precision + speedBonus);
-  state.guess = { lon, lat, distance, points };
+  const points = correct ? BASE_POINTS + Math.ceil(secondsLeft) * SPEED_MULTIPLIER : 0;
+
+  clearInterval(state.timerId);
+  state.selectedCountry = clickedName;
   state.answered = true;
+  state.lastPoints = points;
   state.players[state.turn].score += points;
-  els.nextRound.disabled = false;
-  els.distanceLabel.textContent = `${Math.round(distance)} km`;
-  els.pointsLabel.textContent = `+${points}`;
-  els.feedback.textContent = `${state.target.name} etait la bonne reponse. ${scoreMessage(distance)}`;
-  renderScoreboard();
-  redrawOverlay();
+
+  renderAll();
   syncState();
+  window.setTimeout(() => {
+    if (!state.started || !state.answered) return;
+    advanceTurn();
+  }, 1300);
+}
+
+function advanceTurn() {
+  state.turn = (state.turn + 1) % state.players.length;
+  if (state.turn === 0 && state.round >= state.rounds) {
+    finishGame();
+    return;
+  }
+  startNextTurn();
 }
 
 function tickTimer() {
@@ -243,125 +261,153 @@ function tickTimer() {
   state.timerId = setInterval(() => {
     const remaining = Math.max(0, (state.endsAt - Date.now()) / 1000);
     els.timerLabel.textContent = `${remaining.toFixed(1)}s`;
+    els.pointsLabel.textContent = `Score possible : ${possiblePoints()} pts`;
     if (remaining <= 0 && !state.answered) {
       clearInterval(state.timerId);
-      state.guess = null;
+      state.selectedCountry = "Temps écoulé";
       state.answered = true;
-      els.nextRound.disabled = false;
-      els.distanceLabel.textContent = "Temps ecoule";
-      els.pointsLabel.textContent = "+0";
-      els.feedback.textContent = `${state.target.name} etait la bonne reponse. Trop tard, mais on repart.`;
-      redrawOverlay();
+      state.lastPoints = 0;
+      renderAll();
       syncState();
+      window.setTimeout(advanceTurn, 1300);
     }
   }, 100);
 }
 
 function finishGame() {
   clearInterval(state.timerId);
-  const winner = [...state.players].sort((a, b) => b.score - a.score)[0];
   state.started = false;
+  state.screen = "results";
   state.target = null;
   state.answered = false;
-  els.promptTitle.textContent = `${winner.name} gagne`;
-  els.promptHint.textContent = `Score final : ${winner.score} points. Lance une revanche quand tu veux.`;
-  els.feedback.textContent = "Partie terminee.";
-  els.startGame.textContent = "Revanche";
-  els.nextRound.disabled = true;
-  renderSetup();
-  renderScoreboard();
-  redrawOverlay();
+  renderAll();
   syncState();
 }
 
+function renderAll() {
+  renderScreens();
+  renderSetup();
+  renderRoomLobby();
+  renderPrompt();
+  renderScoreboard();
+  renderFeedback();
+  renderOnlineStatus();
+  saveState();
+  drawMap(countryFeatures);
+}
+
+function renderScreens() {
+  els.setupScreen.classList.toggle("hidden", state.screen !== "setup");
+  els.roomScreen.classList.toggle("hidden", state.screen !== "room");
+  els.gameScreen.classList.toggle("hidden", state.screen !== "game");
+  els.resultScreen.classList.toggle("hidden", state.screen !== "results");
+}
+
+function renderSetup() {
+  els.modeSummary.textContent = state.modes.length === 3 ? "Mix" : state.modes.map(modeLabel).join(" + ");
+  els.roundsInput.value = state.rounds;
+  const soloLabel = els.startGame.querySelector("strong");
+  if (soloLabel) soloLabel.textContent = state.online && state.roomId && !isHost ? "Attente de l’hôte" : "Jouer seul";
+  els.startGame.disabled = Boolean(state.online && state.roomId && !isHost);
+  els.modeInputs.forEach((input) => {
+    input.checked = state.modes.includes(input.value);
+  });
+}
+
+function renderRoomLobby() {
+  if (!els.roomCodeDisplay) return;
+  const players = playersFromRoom(roomData);
+  els.roomCodeDisplay.textContent = state.roomId || "-----";
+  els.roomPlayerCount.textContent = players.length;
+  els.roomHostBadge.textContent = isHost ? "Tu es l’hôte" : "Invité";
+  els.launchRoomGame.disabled = !isHost;
+  els.launchRoomGame.textContent = isHost ? "Lancer la partie" : "Attente de l’hôte";
+  els.roomLobbyMessage.textContent = isHost
+    ? "Partage le code. Quand tout le monde est connecté, lance la partie."
+    : "Tu es connecté. L’hôte lancera la partie.";
+  els.roomPlayersList.innerHTML = players.length
+    ? players.map((player) => `<div class="player-row room-player"><span>${escapeHtml(player.name)}</span><small>${player.id === roomData?.hostId ? "Hôte" : "Joueur"}</small></div>`).join("")
+    : `<div class="player-row room-player"><span>En attente...</span><small>Room</small></div>`;
+}
+
 function renderPrompt() {
-  const label = {
+  els.roundLabel.textContent = state.started ? `Round ${state.round}/${state.rounds}` : `${state.rounds} rounds`;
+  els.currentTurn.textContent = `Tour de ${state.players[state.turn]?.name || "joueur"}`;
+  if (!state.target) {
+    els.promptTitle.textContent = "Prêt ?";
+    els.promptHint.textContent = "Lance une partie depuis les réglages.";
+    els.pointsLabel.textContent = `Score possible : ${BASE_POINTS + MAX_SECONDS * SPEED_MULTIPLIER} pts`;
+    return;
+  }
+  const value = {
     flag: state.target.flag,
     capital: state.target.capital,
     name: state.target.name
   }[state.promptMode];
-  const intro = {
-    flag: "Place le pays de ce drapeau",
-    capital: "Place le pays dont la capitale est",
-    name: "Place ce pays"
-  }[state.promptMode];
-  els.promptTitle.textContent = label;
-  els.promptHint.textContent = intro;
-}
-
-function renderPlayers() {
-  els.playersList.innerHTML = "";
-  state.players.forEach((player, index) => {
-    const row = document.createElement("div");
-    row.className = "player-row";
-    row.innerHTML = `<span>${escapeHtml(player.name)}</span><button type="button" title="Retirer">×</button>`;
-    row.querySelector("button").addEventListener("click", () => {
-      if (state.players.length <= 1) return;
-      state.players.splice(index, 1);
-      state.turn = Math.min(state.turn, state.players.length - 1);
-      saveState();
-      renderPlayers();
-      renderScoreboard();
-      renderSetup();
-      syncState();
-    });
-    els.playersList.appendChild(row);
-  });
-  els.playerCount.textContent = state.players.length;
-}
-
-function renderSetup() {
-  els.roundLabel.textContent = state.started ? `Round ${state.round}/${state.rounds}` : `${state.rounds} rounds`;
-  els.currentTurn.textContent = `Tour de ${state.players[state.turn]?.name || "joueur"}`;
-  els.modeSummary.textContent = state.modes.length === 3 ? "Mix" : state.modes.join(" + ");
-  els.roundsInput.value = state.rounds;
-  els.modeInputs.forEach((input) => {
-    input.checked = state.modes.includes(input.value);
-  });
-  renderOnlineStatus();
-  saveState();
+  els.promptTitle.textContent = value;
+  els.promptHint.textContent = `${state.players[state.turn]?.name || "Joueur"}, clique sur le pays correspondant.`;
+  els.pointsLabel.textContent = state.answered ? `+${state.lastPoints} pts` : `Score possible : ${possiblePoints()} pts`;
 }
 
 function renderScoreboard() {
-  const ranking = [...state.players].sort((a, b) => b.score - a.score);
-  els.scoreboard.innerHTML = ranking
-    .map((player, index) => `<li><span>${index + 1}. ${escapeHtml(player.name)}</span><strong>${player.score}</strong></li>`)
+  const rows = [...state.players].sort((a, b) => b.score - a.score);
+  els.scoreboard.innerHTML = rows
+    .map((player) => `<li class="${player.id === state.players[state.turn]?.id ? "is-current" : ""}"><span>${escapeHtml(player.name)}</span><strong>${player.score}</strong></li>`)
     .join("");
+  els.finalScoreboard.innerHTML = rows
+    .map((player, index) => `<li><span>${index + 1}. ${escapeHtml(player.name)}</span><strong>${player.score} pts</strong></li>`)
+    .join("");
+  const winner = rows[0];
+  els.winnerTitle.textContent = winner ? `${winner.name} gagne` : "Partie terminée";
+}
+
+function renderFeedback() {
+  if (!state.target) {
+    els.feedback.textContent = "Clique sur le pays demandé.";
+    return;
+  }
+  if (!state.answered) {
+    els.feedback.textContent = "Bonne réponse = 100 points + bonus temps. Mauvais pays = 0.";
+    return;
+  }
+  if (state.lastPoints > 0) {
+    els.feedback.textContent = `Correct : ${state.target.name}. +${state.lastPoints} points.`;
+  } else {
+    els.feedback.textContent = `${state.selectedCountry}. Réponse : ${state.target.name}. 0 point.`;
+  }
 }
 
 function redrawOverlay() {
-  if (!overlayGroup) return;
-  overlayGroup.selectAll("*").remove();
-  if (!state.target) return;
-  const targetPoint = projection([state.target.lon, state.target.lat]);
-  if (!targetPoint) return;
+  if (!overlayLayer || !state.target || !state.answered) return;
+  overlayLayer.selectAll("*").remove();
+  const feature = countryFeatures.find(isTargetFeature);
+  if (!feature) return;
+  const centroid = path.centroid(feature);
+  overlayLayer.append("circle").attr("class", "target-pulse").attr("cx", centroid[0]).attr("cy", centroid[1]).attr("r", 13);
+  overlayLayer.append("text").attr("class", "target-label").attr("x", centroid[0] + 17).attr("y", centroid[1] - 11).text(state.target.name);
+}
 
-  if (state.answered) {
-    overlayGroup
-      .append("circle")
-      .attr("class", "target-pulse")
-      .attr("cx", targetPoint[0])
-      .attr("cy", targetPoint[1])
-      .attr("r", 13);
-    overlayGroup
-      .append("text")
-      .attr("class", "target-label")
-      .attr("x", targetPoint[0] + 16)
-      .attr("y", targetPoint[1] - 12)
-      .text(state.target.name);
-  }
+function possiblePoints() {
+  const secondsLeft = state.endsAt ? Math.max(0, Math.ceil((state.endsAt - Date.now()) / 1000)) : MAX_SECONDS;
+  return BASE_POINTS + secondsLeft * SPEED_MULTIPLIER;
+}
 
-  if (!state.guess) return;
-  const guessPoint = projection([state.guess.lon, state.guess.lat]);
-  if (!guessPoint) return;
-  overlayGroup
-    .append("line")
-    .attr("class", "distance-line")
-    .attr("x1", guessPoint[0])
-    .attr("y1", guessPoint[1])
-    .attr("x2", targetPoint[0])
-    .attr("y2", targetPoint[1]);
-  overlayGroup.append("circle").attr("class", "guess-dot").attr("cx", guessPoint[0]).attr("cy", guessPoint[1]).attr("r", 7);
+function isTargetFeature(feature) {
+  const clicked = normalizeName(getFeatureName(feature));
+  return targetNames(state.target).some((name) => normalizeName(name) === clicked);
+}
+
+function targetNames(target) {
+  if (!target) return [];
+  return [target.name, ...(target.aliases || []), ...(target.geoNames || [])];
+}
+
+function getFeatureName(feature) {
+  return feature?.properties?.name || feature?.properties?.NAME || "Pays inconnu";
+}
+
+function modeLabel(mode) {
+  return { flag: "Drapeau", capital: "Capitale", name: "Nom" }[mode] || mode;
 }
 
 function restoreState() {
@@ -388,17 +434,22 @@ function saveState() {
 
 async function createOnlineRoom() {
   setOnlineMessage("Création...");
+  setRoomHelp("Connexion à Firebase...");
   try {
     const roomId = window.GeoDuelFirebase.makeRoomId();
-    state.roomId = await window.GeoDuelFirebase.createRoom(roomId, serializeState());
+    isHost = true;
+    state.roomId = roomId;
     state.online = true;
+    roomData = makeRoomPayload("lobby");
+    await window.GeoDuelFirebase.putRoom(roomId, roomData);
     updateRoomUrl(state.roomId);
-    subscribeToRoom(state.roomId);
-    renderSetup();
+    startRoomPolling();
+    state.screen = "room";
+    renderAll();
     setOnlineMessage(`Room ${state.roomId}`);
+    setRoomHelp("Room créée. Copie le code. L’hôte lance quand tout le monde est connecté.");
   } catch (error) {
-    setOnlineMessage("Erreur Firebase");
-    els.feedback.textContent = "Impossible de créer la room. Vérifie les règles Realtime Database.";
+    showFirebaseRulesError(error);
   }
 }
 
@@ -407,78 +458,178 @@ async function joinOnlineRoom(event) {
   const roomId = window.GeoDuelFirebase.cleanRoomId(els.roomCode.value || new URLSearchParams(location.search).get("room"));
   if (!roomId) return;
   setOnlineMessage("Connexion...");
+  setRoomHelp("Recherche de la room...");
   try {
     const room = await window.GeoDuelFirebase.joinRoom(roomId);
     if (!room) {
       setOnlineMessage("Room introuvable");
+      setRoomHelp("Vérifie le code ou demande à ton ami de recréer une room.");
+      return;
+    }
+    const data = normalizeRoom(room);
+    if (data.status !== "lobby") {
+      setOnlineMessage("Partie déjà lancée");
+      setRoomHelp("Cette room est déjà en jeu. Crée une nouvelle room pour rejoindre depuis le début.");
       return;
     }
     state.roomId = roomId;
     state.online = true;
-    applyRemoteState(room.state, room.updatedAt);
+    isHost = data.hostId === onlinePlayerId;
+    await window.GeoDuelFirebase.putPath(roomId, `/players/${onlinePlayerId}`, { name: ownOnlineName(), score: 0 });
     updateRoomUrl(roomId);
-    subscribeToRoom(roomId);
-    renderSetup();
+    startRoomPolling();
+    state.screen = "room";
+    renderAll();
     setOnlineMessage(`Room ${roomId}`);
+    setRoomHelp("Connecté à la room. Attends que l’hôte lance la partie.");
   } catch (error) {
-    setOnlineMessage("Erreur Firebase");
-    els.feedback.textContent = "Impossible de rejoindre la room. Vérifie que la database accepte les lectures publiques.";
+    showFirebaseRulesError(error);
   }
 }
 
 function autoJoinRoomFromUrl() {
   const roomId = window.GeoDuelFirebase.cleanRoomId(new URLSearchParams(location.search).get("room"));
-  if (!roomId) {
-    renderOnlineStatus();
-    return;
-  }
+  if (!roomId) return;
   els.roomCode.value = roomId;
   joinOnlineRoom();
 }
 
-function subscribeToRoom(roomId) {
-  unsubscribeRoom?.();
-  unsubscribeRoom = window.GeoDuelFirebase.subscribe(roomId, (remoteState, updatedAt, error) => {
-    if (error) {
-      setOnlineMessage("Sync en attente");
-      return;
-    }
-    if (!remoteState || updatedAt <= state.lastRemoteUpdate) return;
-    applyRemoteState(remoteState, updatedAt);
-  });
+function startRoomPolling() {
+  clearInterval(roomPollTimer);
+  refreshRoom();
+  roomPollTimer = setInterval(refreshRoom, 1100);
+}
+
+async function refreshRoom() {
+  if (!state.roomId) return;
+  try {
+    const data = await window.GeoDuelFirebase.getRoom(state.roomId);
+    if (!data) throw new Error("Room introuvable.");
+    roomData = normalizeRoom(data);
+    isHost = roomData.hostId === onlinePlayerId;
+    applyRoomData(roomData);
+  } catch (error) {
+    setOnlineMessage("Sync en attente");
+    setRoomHelp(error.message);
+  }
 }
 
 async function syncState() {
-  if (!state.online || !state.roomId || suppressPublish) return;
+  if (!state.online || !state.roomId || suppressPublish || !roomData) return;
   try {
-    state.lastRemoteUpdate = await window.GeoDuelFirebase.publishState(state.roomId, serializeState());
+    roomData = {
+      ...roomData,
+      ...serializeState(),
+      players: Object.fromEntries(state.players.map((player) => [player.id, { name: player.name, score: player.score || 0 }])),
+      updatedAt: Date.now()
+    };
+    await window.GeoDuelFirebase.patchRoom(state.roomId, roomData);
     setOnlineMessage(`Room ${state.roomId}`);
-  } catch (error) {
+  } catch {
     setOnlineMessage("Sync échouée");
+    setRoomHelp("Firebase refuse l’écriture. Ouvre les règles Realtime Database pour synchroniser la partie.");
   }
 }
 
 function serializeState() {
   return {
-    players: state.players,
+    screen: state.screen,
     modes: state.modes,
     rounds: state.rounds,
     round: state.round,
     turn: state.turn,
     target: state.target,
     promptMode: state.promptMode,
-    guess: state.guess,
+    selectedCountry: state.selectedCountry,
     answered: state.answered,
     started: state.started,
     endsAt: state.endsAt,
-    usedTargets: state.usedTargets
+    usedTargets: state.usedTargets,
+    lastPoints: state.lastPoints
   };
+}
+
+function makeRoomPayload(status) {
+  return {
+    hostId: onlinePlayerId,
+    status,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    players: { [onlinePlayerId]: { name: ownOnlineName(), score: 0 } },
+    ...serializeState(),
+    screen: "setup",
+    started: false
+  };
+}
+
+function normalizeRoom(data) {
+  if (data.state) {
+    return {
+      hostId: data.hostId || onlinePlayerId,
+      status: data.status || (data.state.started ? "playing" : "lobby"),
+      players: Object.fromEntries((data.state.players || []).map((player) => [player.id || crypto.randomUUID(), { name: player.name, score: player.score || 0 }])),
+      ...data.state,
+      updatedAt: data.updatedAt || Date.now()
+    };
+  }
+  return data;
+}
+
+async function launchOnlineGame() {
+  if (!state.roomId || !isHost) return;
+  const onlinePlayers = playersFromRoom(roomData);
+  state.players = onlinePlayers.length ? onlinePlayers : state.players;
+  state.players.forEach((player) => {
+    player.score = 0;
+  });
+  state.screen = "game";
+  state.started = true;
+  state.round = 0;
+  state.turn = 0;
+  state.usedTargets = [];
+  roomData = {
+    ...roomData,
+    status: "playing",
+    players: Object.fromEntries(state.players.map((player) => [player.id, { name: player.name, score: 0 }])),
+    ...serializeState(),
+    updatedAt: Date.now()
+  };
+  await window.GeoDuelFirebase.patchRoom(state.roomId, roomData);
+  startNextTurn();
+}
+
+function applyRoomData(data) {
+  const onlinePlayers = playersFromRoom(data);
+  if (onlinePlayers.length) state.players = onlinePlayers;
+  state.online = true;
+  if (data.status === "lobby") {
+    state.screen = "room";
+    state.started = false;
+    renderAll();
+    setOnlineMessage(`Room ${state.roomId}`);
+    setRoomHelp(isHost ? "Partage le code. Lance quand tout le monde est connecté." : "Connecté. Attends que l’hôte lance la partie.");
+    return;
+  }
+  applyRemoteState(data, data.updatedAt || Date.now());
+}
+
+function playersFromRoom(data) {
+  return Object.entries(data?.players || {}).map(([id, player]) => ({
+    id,
+    name: player.name || "Joueur",
+    score: player.score || 0
+  }));
+}
+
+function ownOnlineName() {
+  return (els.playerName.value.trim() || state.players[0]?.name || "Joueur").slice(0, 16);
 }
 
 function applyRemoteState(remoteState, updatedAt = Date.now()) {
   suppressPublish = true;
   clearInterval(state.timerId);
   Object.assign(state, {
+    screen: remoteState.screen || "setup",
     players: remoteState.players?.length ? remoteState.players : state.players,
     modes: remoteState.modes?.length ? remoteState.modes : state.modes,
     rounds: remoteState.rounds || state.rounds,
@@ -486,38 +637,15 @@ function applyRemoteState(remoteState, updatedAt = Date.now()) {
     turn: remoteState.turn || 0,
     target: remoteState.target || null,
     promptMode: remoteState.promptMode || "name",
-    guess: remoteState.guess || null,
+    selectedCountry: remoteState.selectedCountry || null,
     answered: Boolean(remoteState.answered),
     started: Boolean(remoteState.started),
     endsAt: remoteState.endsAt || 0,
-    usedTargets: remoteState.usedTargets || []
+    usedTargets: remoteState.usedTargets || [],
+    lastPoints: remoteState.lastPoints || 0,
+    lastRemoteUpdate: updatedAt
   });
-  state.lastRemoteUpdate = updatedAt;
-  if (state.target) {
-    renderPrompt();
-  } else if (!state.started) {
-    els.promptTitle.textContent = "Pret ?";
-    els.promptHint.textContent = "Ajoute des joueurs, choisis les modes, puis lance une partie.";
-  }
-  els.startGame.textContent = state.started ? "Recommencer" : "Lancer";
-  els.nextRound.disabled = !state.answered || !state.started;
-  if (state.guess) {
-    els.distanceLabel.textContent = `${Math.round(state.guess.distance)} km`;
-    els.pointsLabel.textContent = `+${state.guess.points}`;
-    els.feedback.textContent = `${state.target.name} etait la bonne reponse. ${scoreMessage(state.guess.distance)}`;
-  } else if (state.answered && state.target) {
-    els.distanceLabel.textContent = "Temps ecoule";
-    els.pointsLabel.textContent = "+0";
-    els.feedback.textContent = `${state.target.name} etait la bonne reponse. Trop tard, mais on repart.`;
-  } else {
-    els.distanceLabel.textContent = "-";
-    els.pointsLabel.textContent = "-";
-    els.feedback.textContent = state.started ? "Clique sur la carte pour placer ton marqueur." : "Clique sur la carte pour placer ton marqueur.";
-  }
-  renderPlayers();
-  renderSetup();
-  renderScoreboard();
-  redrawOverlay();
+  renderAll();
   if (state.started && !state.answered && state.target) tickTimer();
   suppressPublish = false;
 }
@@ -526,30 +654,28 @@ function updateRoomUrl(roomId) {
   const url = new URL(location.href);
   url.searchParams.set("room", roomId);
   history.replaceState({}, "", url);
-  els.roomLink.value = url.href;
 }
 
-async function copyRoomLink() {
-  const link = els.roomLink.value;
-  if (!link) return;
+async function copyRoomCode() {
+  if (!state.roomId) return;
+  await copyText(state.roomId);
+  els.roomLobbyMessage.textContent = `Code ${state.roomId} copié.`;
+}
+
+async function copyText(value) {
   try {
-    await navigator.clipboard.writeText(link);
-    setOnlineMessage("Lien copié");
+    await navigator.clipboard.writeText(value);
   } catch {
-    els.roomLink.select();
-    setOnlineMessage("Lien prêt");
+    window.prompt("Copie ce code :", value);
   }
 }
 
 function renderOnlineStatus() {
   if (state.roomId) {
     els.onlineStatus.textContent = state.online ? `Room ${state.roomId}` : "Room sauvegardée";
-    els.roomShare.classList.remove("hidden");
     updateRoomUrl(state.roomId);
   } else {
     els.onlineStatus.textContent = "Local";
-    els.roomShare.classList.add("hidden");
-    els.roomLink.value = "";
   }
 }
 
@@ -557,19 +683,14 @@ function setOnlineMessage(message) {
   els.onlineStatus.textContent = message;
 }
 
-function haversineKm(lat1, lon1, lat2, lon2) {
-  const earth = 6371;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-  return earth * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+function setRoomHelp(message) {
+  els.roomHelp.textContent = message;
 }
 
-function scoreMessage(distance) {
-  if (distance < 100) return "Precision chirurgicale.";
-  if (distance < 350) return "Tres propre.";
-  if (distance < 900) return "Solide.";
-  return "Il y avait de l'idee.";
+function showFirebaseRulesError(error) {
+  setOnlineMessage("Firebase bloqué");
+  setRoomHelp("Ta Realtime Database refuse les accès publics. Dans Firebase > Realtime Database > Rules, colle le contenu de database.rules.json puis publie.");
+  console.warn(error);
 }
 
 function sample(items) {
@@ -580,12 +701,16 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
-function toRad(value) {
-  return (value * Math.PI) / 180;
+function normalizeName(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9]+/gi, " ")
+    .trim()
+    .toLowerCase();
 }
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[char]);
 }
-
-const countries = window.GEO_DUEL_COUNTRIES;

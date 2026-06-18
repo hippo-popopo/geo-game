@@ -1,10 +1,9 @@
 {
   "rules": {
-    "rooms": {
-      "$roomId": {
+    "geo-duel": {
+      "rooms": {
         ".read": true,
-        ".write": true,
-        ".validate": "newData.hasChildren(['updatedAt', 'state']) || !newData.exists()"
+        ".write": true
       }
     }
   }

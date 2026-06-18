@@ -1,7 +1,12 @@
-const GEO_DUEL_DATABASE_URL = "https://geo-game-4f27f-default-rtdb.europe-west1.firebasedatabase.app";
+const GEO_DUEL_FALLBACK_DATABASE_URL = "https://geo-game-4f27f-default-rtdb.europe-west1.firebasedatabase.app";
+const GEO_DUEL_DATABASE_URL = (window.GEO_DUEL_FIREBASE?.databaseURL || GEO_DUEL_FALLBACK_DATABASE_URL).replace(/\/$/, "");
 
 function roomUrl(roomId) {
-  return `${GEO_DUEL_DATABASE_URL}/rooms/${encodeURIComponent(roomId)}.json`;
+  return `${GEO_DUEL_DATABASE_URL}/geo-duel/rooms/${encodeURIComponent(roomId)}.json`;
+}
+
+function roomPathUrl(roomId, path = "") {
+  return `${GEO_DUEL_DATABASE_URL}/geo-duel/rooms/${encodeURIComponent(roomId)}${path}.json`;
 }
 
 async function requestJson(url, options = {}) {
@@ -19,7 +24,7 @@ async function requestJson(url, options = {}) {
 }
 
 window.GeoDuelFirebase = {
-  enabled: true,
+  enabled: Boolean(GEO_DUEL_DATABASE_URL),
   databaseUrl: GEO_DUEL_DATABASE_URL,
   makeRoomId() {
     return Math.random().toString(36).slice(2, 6).toUpperCase();
@@ -28,6 +33,7 @@ window.GeoDuelFirebase = {
     return String(value || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
   },
   async createRoom(roomId, state) {
+    if (!this.enabled) throw new Error("Ajoute l'URL Firebase dans firebase-config.js.");
     const cleanId = this.cleanRoomId(roomId);
     await requestJson(roomUrl(cleanId), {
       method: "PUT",
@@ -39,12 +45,39 @@ window.GeoDuelFirebase = {
     });
     return cleanId;
   },
+  async getRoom(roomId) {
+    if (!this.enabled) throw new Error("Ajoute l'URL Firebase dans firebase-config.js.");
+    return requestJson(roomUrl(this.cleanRoomId(roomId)));
+  },
+  async putRoom(roomId, data) {
+    if (!this.enabled) throw new Error("Ajoute l'URL Firebase dans firebase-config.js.");
+    await requestJson(roomUrl(this.cleanRoomId(roomId)), {
+      method: "PUT",
+      body: JSON.stringify(data)
+    });
+  },
+  async patchRoom(roomId, data) {
+    if (!this.enabled) throw new Error("Ajoute l'URL Firebase dans firebase-config.js.");
+    await requestJson(roomUrl(this.cleanRoomId(roomId)), {
+      method: "PATCH",
+      body: JSON.stringify(data)
+    });
+  },
+  async putPath(roomId, path, data) {
+    if (!this.enabled) throw new Error("Ajoute l'URL Firebase dans firebase-config.js.");
+    await requestJson(roomPathUrl(this.cleanRoomId(roomId), path), {
+      method: "PUT",
+      body: JSON.stringify(data)
+    });
+  },
   async joinRoom(roomId) {
+    if (!this.enabled) throw new Error("Ajoute l'URL Firebase dans firebase-config.js.");
     const cleanId = this.cleanRoomId(roomId);
     const room = await requestJson(roomUrl(cleanId));
     return room ? { roomId: cleanId, state: room.state, updatedAt: room.updatedAt || 0 } : null;
   },
   async publishState(roomId, state) {
+    if (!this.enabled) throw new Error("Ajoute l'URL Firebase dans firebase-config.js.");
     const cleanId = this.cleanRoomId(roomId);
     const updatedAt = Date.now();
     await requestJson(roomUrl(cleanId), {

@@ -8,115 +8,164 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <main class="game-shell">
-      <section class="playfield" aria-label="Carte du monde interactive">
-        <div class="map-topbar">
-          <div class="brand-lockup">
+    <main class="app">
+      <section id="setupScreen" class="setup-screen">
+        <div class="setup-visual" aria-hidden="true"></div>
+        <div class="setup-card">
+          <div class="brand-row">
             <span class="brand-mark">GD</span>
             <div>
-              <h1>Geo Duel</h1>
-              <p>Place le pays le plus vite possible.</p>
+              <p class="eyebrow">Geo Duel</p>
+              <h1>Place les pays avant tes amis.</h1>
             </div>
           </div>
-          <div class="round-chip">
-            <span id="roundLabel">Round 1/10</span>
-            <strong id="timerLabel">20.0s</strong>
-          </div>
-        </div>
 
-        <div class="map-card">
-          <svg id="worldMap" role="img" aria-label="Carte du monde"></svg>
-          <div id="mapStatus" class="map-status">Chargement de la carte...</div>
+          <div class="rule-strip">
+            <div><strong>100</strong><span>points si le pays est bon</span></div>
+            <div><strong>+ temps</strong><span>10 pts par seconde restante</span></div>
+            <div><strong>0</strong><span>point si tu cliques le mauvais pays</span></div>
+          </div>
+
+          <section class="settings-grid">
+            <div class="panel">
+              <div class="panel-title">
+                <h2>Partie</h2>
+                <span id="modeSummary">Mix</span>
+              </div>
+              <label class="name-field">
+                <span>Ton pseudo</span>
+                <input id="playerName" type="text" autocomplete="off" maxlength="16" placeholder="Nina" />
+              </label>
+              <div class="toggles">
+                <label><input type="checkbox" value="flag" checked /> Drapeau</label>
+                <label><input type="checkbox" value="capital" checked /> Capitale</label>
+                <label><input type="checkbox" value="name" checked /> Nom</label>
+              </div>
+              <div class="settings-row">
+                <label for="roundsInput">Rounds</label>
+                <input id="roundsInput" type="number" min="3" max="30" value="10" />
+              </div>
+            </div>
+
+            <div class="panel online-panel">
+              <div class="panel-title">
+                <h2>Online</h2>
+                <span id="onlineStatus">Local</span>
+              </div>
+              <p class="panel-copy">Crée une room, copie le code, envoie-le à tes amis. Tout le monde voit la même partie.</p>
+              <div class="room-actions">
+                <button id="createRoom" type="button">Créer une room</button>
+                <form id="joinRoomForm" class="inline-form">
+                  <input id="roomCode" type="text" autocomplete="off" maxlength="8" placeholder="Code room" />
+                  <button type="submit" title="Rejoindre">→</button>
+                </form>
+              </div>
+              <p id="roomHelp" class="room-help">Si la room ne se crée pas, ouvre les règles Realtime Database avec le fichier <code>database.rules.json</code>.</p>
+            </div>
+          </section>
+
+          <section class="mode-choice">
+            <button id="startGame" class="choice-card primary-choice" type="button">
+              <span>Mode solo</span>
+              <strong>Jouer seul</strong>
+              <small>Score contre la montre, sans lobby.</small>
+            </button>
+            <div class="choice-card">
+              <span>Mode online</span>
+              <strong>Créer ou rejoindre</strong>
+              <small>Utilise les boutons Online au-dessus pour jouer avec tes amis.</small>
+            </div>
+          </section>
         </div>
       </section>
 
-      <aside class="control-panel">
-        <section class="panel hero-panel">
-          <img src="./assets/world-arena.png" alt="" />
+      <section id="roomScreen" class="room-screen hidden">
+        <div class="room-card">
+          <div class="brand-row">
+            <span class="brand-mark">GD</span>
+            <div>
+              <p class="eyebrow">Room privée</p>
+              <h1>Salle d’attente</h1>
+            </div>
+          </div>
+          <div class="room-code-block">
+            <span>Code à envoyer</span>
+            <strong id="roomCodeDisplay">-----</strong>
+            <p>Donne ce code à tes amis. Ils le rentrent dans “Rejoindre une room”.</p>
+          </div>
+          <div class="room-lobby-grid">
+            <section class="panel">
+              <div class="panel-title">
+                <h2>Joueurs connectés</h2>
+                <span id="roomPlayerCount">1</span>
+              </div>
+              <div id="roomPlayersList" class="players-list"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-title">
+                <h2>Inviter</h2>
+                <span id="roomHostBadge">Hôte</span>
+              </div>
+              <div class="room-copy-actions">
+                <button id="copyRoomCode" type="button">Copier le code</button>
+              </div>
+              <p id="roomLobbyMessage" class="room-help">En attente des joueurs...</p>
+            </section>
+          </div>
+          <div class="launch-row">
+            <button id="leaveRoom" type="button">Quitter la room</button>
+            <button id="launchRoomGame" class="primary" type="button">Lancer la partie</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="gameScreen" class="game-screen hidden" aria-label="Partie en cours">
+        <header class="game-hud">
           <div>
-            <p class="eyebrow">Partie rapide</p>
-            <h2 id="promptTitle">Pret ?</h2>
-            <p id="promptHint">Ajoute des joueurs, choisis les modes, puis lance une partie.</p>
+            <p id="roundLabel">Round 1/10</p>
+            <h2 id="promptTitle">France</h2>
+            <span id="promptHint">Clique sur le bon pays.</span>
           </div>
-        </section>
+          <div class="game-actions">
+            <button id="gameMenu" type="button">Menu</button>
+            <div class="timer-pill">
+              <span>Temps</span>
+              <strong id="timerLabel">20.0s</strong>
+            </div>
+          </div>
+        </header>
 
-        <section class="panel setup-panel">
-          <div class="panel-title">
-            <h3>Joueurs</h3>
-            <span id="playerCount">2</span>
-          </div>
-          <div id="playersList" class="players-list"></div>
-          <form id="addPlayerForm" class="inline-form">
-            <input id="playerName" type="text" autocomplete="off" maxlength="16" placeholder="Nom du joueur" />
-            <button type="submit" title="Ajouter">+</button>
-          </form>
-        </section>
+        <div class="map-stage">
+          <svg id="worldMap" role="img" aria-label="Carte du monde"></svg>
+          <div id="mapStatus" class="map-status">Chargement de la carte...</div>
+          <div id="feedback" class="feedback">Clique sur le pays demandé.</div>
+        </div>
 
-        <section class="panel online-panel">
-          <div class="panel-title">
-            <h3>Online</h3>
-            <span id="onlineStatus">Local</span>
-          </div>
-          <div class="room-actions">
-            <button id="createRoom" type="button">Créer une room</button>
-            <form id="joinRoomForm" class="inline-form">
-              <input id="roomCode" type="text" autocomplete="off" maxlength="8" placeholder="Code room" />
-              <button type="submit" title="Rejoindre">→</button>
-            </form>
-          </div>
-          <div id="roomShare" class="room-share hidden">
-            <input id="roomLink" type="text" readonly />
-            <button id="copyRoomLink" type="button">Copier</button>
-          </div>
-        </section>
-
-        <section class="panel">
-          <div class="panel-title">
-            <h3>Modes</h3>
-            <span id="modeSummary">Mix</span>
-          </div>
-          <div class="toggles">
-            <label><input type="checkbox" value="flag" checked /> Drapeau</label>
-            <label><input type="checkbox" value="capital" checked /> Capitale</label>
-            <label><input type="checkbox" value="name" checked /> Nom</label>
-          </div>
-          <div class="settings-row">
-            <label for="roundsInput">Rounds</label>
-            <input id="roundsInput" type="number" min="3" max="30" value="10" />
-          </div>
-        </section>
-
-        <section class="panel action-panel">
-          <button id="startGame" class="primary">Lancer</button>
-          <button id="nextRound" disabled>Valider / suivant</button>
-        </section>
-
-        <section class="panel">
-          <div class="panel-title">
-            <h3>Scores</h3>
+        <footer class="score-dock">
+          <div>
             <span id="currentTurn">Tour de Nina</span>
+            <strong id="pointsLabel">Score possible : 300</strong>
           </div>
           <ol id="scoreboard" class="scoreboard"></ol>
-        </section>
+        </footer>
+      </section>
 
-        <section class="panel result-panel">
-          <div class="result-grid">
-            <div>
-              <span>Precision</span>
-              <strong id="distanceLabel">-</strong>
-            </div>
-            <div>
-              <span>Points</span>
-              <strong id="pointsLabel">-</strong>
-            </div>
+      <section id="resultScreen" class="result-screen hidden">
+        <div class="result-card">
+          <p class="eyebrow">Fin de partie</p>
+          <h2 id="winnerTitle">Nina gagne</h2>
+          <ol id="finalScoreboard" class="final-scoreboard"></ol>
+          <div class="launch-row">
+            <button id="backToSetup" type="button">Réglages</button>
+            <button id="rematchGame" class="primary" type="button">Revanche</button>
           </div>
-          <p id="feedback">Clique sur la carte pour placer ton marqueur.</p>
-        </section>
-      </aside>
+        </div>
+      </section>
     </main>
 
     <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
     <script src="./countries.js"></script>
+    <script src="./firebase-config.js"></script>
     <script src="./firebase-adapter.js"></script>
     <script src="./app.js"></script>
   </body>
