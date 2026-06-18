@@ -27,6 +27,7 @@ const state = {
   started: false,
   endsAt: 0,
   usedTargets: [],
+  answers: {},
   lastPoints: 0,
   roomId: null,
   online: false,
@@ -205,6 +206,10 @@ function returnToSetup() {
 
 function startNextTurn() {
   if (!state.started) return;
+  if (state.online) {
+    startOnlineRound();
+    return;
+  }
   const isNewRound = state.turn === 0;
   if (isNewRound) state.round += 1;
   if (state.round > state.rounds) {
@@ -225,18 +230,51 @@ function startNextTurn() {
   syncState();
 }
 
+function startOnlineRound() {
+  state.round += 1;
+  if (state.round > state.rounds) {
+    finishGame();
+    return;
+  }
+  const pool = countries.filter((country) => !state.usedTargets.includes(country.name));
+  state.target = sample(pool.length ? pool : countries);
+  state.usedTargets.push(state.target.name);
+  state.promptMode = sample(state.modes);
+  state.selectedCountry = null;
+  state.answers = {};
+  state.answered = false;
+  state.lastPoints = possiblePoints();
+  state.endsAt = Date.now() + MAX_SECONDS * 1000;
+  renderAll();
+  tickTimer();
+  syncState();
+}
+
 function handleCountryClick(feature) {
   if (!state.started || state.screen !== "game" || state.answered || !state.target) return;
-  if (state.online && state.players[state.turn]?.id !== onlinePlayerId) return;
+  if (state.online && state.answers?.[onlinePlayerId]) return;
   const clickedName = getFeatureName(feature);
   const correct = isTargetFeature(feature);
   const secondsLeft = Math.max(0, (state.endsAt - Date.now()) / 1000);
   const points = correct ? BASE_POINTS + Math.ceil(secondsLeft) * SPEED_MULTIPLIER : 0;
 
-  clearInterval(state.timerId);
   state.selectedCountry = clickedName;
-  state.answered = true;
   state.lastPoints = points;
+  if (state.online) {
+    state.answers = {
+      ...(state.answers || {}),
+      [onlinePlayerId]: { playerId: onlinePlayerId, country: clickedName, correct, points }
+    };
+    state.players = state.players.map((player) => player.id === onlinePlayerId ? { ...player, score: player.score + points } : player);
+    state.answered = Object.keys(state.answers).length >= state.players.length;
+    renderAll();
+    syncState();
+    if (isHost && state.answered) window.setTimeout(advanceOnlineRound, 1200);
+    return;
+  }
+
+  clearInterval(state.timerId);
+  state.answered = true;
   state.players[state.turn].score += points;
 
   renderAll();
@@ -269,9 +307,14 @@ function tickTimer() {
       state.lastPoints = 0;
       renderAll();
       syncState();
-      window.setTimeout(advanceTurn, 1300);
+      window.setTimeout(state.online ? advanceOnlineRound : advanceTurn, 1300);
     }
   }, 100);
+}
+
+function advanceOnlineRound() {
+  if (!isHost || !state.started || state.screen !== "game") return;
+  startOnlineRound();
 }
 
 function finishGame() {
@@ -332,7 +375,7 @@ function renderRoomLobby() {
 
 function renderPrompt() {
   els.roundLabel.textContent = state.started ? `Round ${state.round}/${state.rounds}` : `${state.rounds} rounds`;
-  els.currentTurn.textContent = `Tour de ${state.players[state.turn]?.name || "joueur"}`;
+  els.currentTurn.textContent = state.online ? `${answeredCount()}/${state.players.length} réponses` : `Tour de ${state.players[state.turn]?.name || "joueur"}`;
   if (!state.target) {
     els.promptTitle.textContent = "Prêt ?";
     els.promptHint.textContent = "Lance une partie depuis les réglages.";
@@ -345,8 +388,10 @@ function renderPrompt() {
     name: state.target.name
   }[state.promptMode];
   els.promptTitle.textContent = value;
-  els.promptHint.textContent = `${state.players[state.turn]?.name || "Joueur"}, clique sur le pays correspondant.`;
-  els.pointsLabel.textContent = state.answered ? `+${state.lastPoints} pts` : `Score possible : ${possiblePoints()} pts`;
+  els.promptHint.textContent = state.online ? "Tout le monde clique en même temps." : `${state.players[state.turn]?.name || "Joueur"}, clique sur le pays correspondant.`;
+  els.pointsLabel.textContent = state.online && state.answers?.[onlinePlayerId]
+    ? `Réponse envoyée : +${state.answers[onlinePlayerId].points} pts`
+    : state.answered ? `+${state.lastPoints} pts` : `Score possible : ${possiblePoints()} pts`;
 }
 
 function renderScoreboard() {
@@ -364,6 +409,10 @@ function renderScoreboard() {
 function renderFeedback() {
   if (!state.target) {
     els.feedback.textContent = "Clique sur le pays demandé.";
+    return;
+  }
+  if (state.online && state.answers?.[onlinePlayerId] && !state.answered) {
+    els.feedback.textContent = `Réponse envoyée. En attente des autres joueurs (${answeredCount()}/${state.players.length}).`;
     return;
   }
   if (!state.answered) {
@@ -554,6 +603,7 @@ function serializeState() {
     started: state.started,
     endsAt: state.endsAt,
     usedTargets: state.usedTargets,
+    answers: state.answers,
     lastPoints: state.lastPoints
   };
 }
@@ -596,6 +646,7 @@ async function launchOnlineGame() {
   state.round = 0;
   state.turn = 0;
   state.usedTargets = [];
+  state.answers = {};
   roomData = {
     ...roomData,
     status: "playing",
@@ -647,6 +698,7 @@ function applyRemoteState(remoteState, updatedAt = Date.now()) {
     target: remoteState.target || null,
     promptMode: remoteState.promptMode || "name",
     selectedCountry: remoteState.selectedCountry || null,
+    answers: remoteState.answers || {},
     answered: Boolean(remoteState.answered),
     started: Boolean(remoteState.started),
     endsAt: remoteState.endsAt || 0,
@@ -656,7 +708,16 @@ function applyRemoteState(remoteState, updatedAt = Date.now()) {
   });
   renderAll();
   if (state.started && !state.answered && state.target) tickTimer();
+  if (state.online && isHost && state.started && state.target && !state.answered && answeredCount() >= state.players.length) {
+    state.answered = true;
+    syncState();
+    window.setTimeout(advanceOnlineRound, 1200);
+  }
   suppressPublish = false;
+}
+
+function answeredCount() {
+  return Object.keys(state.answers || {}).length;
 }
 
 function updateRoomUrl(roomId) {
