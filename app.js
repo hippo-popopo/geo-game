@@ -3,7 +3,7 @@ const STORAGE_KEY = "geo-duel-state-v4";
 const MAX_SECONDS = 20;
 const BASE_POINTS = 100;
 const SPEED_MULTIPLIER = 10;
-const ROUND_REVEAL_MS = 1400;
+const ROUND_RECAP_MS = 5000;
 
 if ("scrollRestoration" in history) history.scrollRestoration = "manual";
 
@@ -109,6 +109,11 @@ function bindEvents() {
   els.zoomIn?.addEventListener("click", () => zoomMap(1.35));
   els.zoomOut?.addEventListener("click", () => zoomMap(0.75));
   els.zoomReset?.addEventListener("click", resetMapZoom);
+  els.playerName.addEventListener("input", () => {
+    const name = ownOnlineName();
+    state.players = state.players.map((player) => player.id === onlinePlayerId ? { ...player, name } : player);
+    saveState();
+  });
   els.roundsInput.addEventListener("change", () => {
     state.rounds = clamp(Number(els.roundsInput.value) || 10, 3, 30);
     renderAll();
@@ -175,7 +180,12 @@ function updateMapState() {
   if (!countryLayer) return;
   countryLayer
     .selectAll("path")
-    .attr("class", (feature) => `country ${shouldRevealAnswer() && isTargetFeature(feature) ? "is-answer" : ""}`);
+    .attr("class", (feature) => {
+      const classes = ["country"];
+      if (isSelectedFeature(feature)) classes.push("is-selected");
+      if (shouldRevealAnswer() && isTargetFeature(feature)) classes.push("is-answer");
+      return classes.join(" ");
+    });
   redrawOverlay();
 }
 
@@ -283,7 +293,7 @@ async function handleCountryClick(feature) {
   window.setTimeout(() => {
     if (!state.started || !state.answered) return;
     advanceTurn();
-  }, ROUND_REVEAL_MS);
+  }, ROUND_RECAP_MS);
 }
 
 function advanceTurn() {
@@ -304,7 +314,7 @@ function tickTimer() {
     if (remaining > 0) return;
     clearInterval(state.timerId);
     if (state.online) {
-      if (isHost) scheduleHostAdvance();
+      if (isHost) maybeHostAdvance(roomData);
       return;
     }
     if (!state.answered) {
@@ -313,7 +323,7 @@ function tickTimer() {
       state.roundComplete = true;
       state.lastPoints = 0;
       renderAll();
-      window.setTimeout(advanceTurn, ROUND_REVEAL_MS);
+      window.setTimeout(advanceTurn, ROUND_RECAP_MS);
     }
   }, 100);
 }
@@ -412,6 +422,7 @@ function renderScoreboard() {
 }
 
 function renderFeedback() {
+  els.feedback.classList.toggle("is-recap", Boolean(state.roundComplete));
   if (!state.target) {
     els.feedback.textContent = "Clique sur le pays demandé.";
     return;
@@ -427,6 +438,10 @@ function renderFeedback() {
   }
   if (!state.answered && !state.roundComplete) {
     els.feedback.textContent = "Bonne réponse = 100 points + bonus temps. Mauvais pays = 0.";
+    return;
+  }
+  if (state.roundComplete) {
+    els.feedback.innerHTML = recapHtml();
     return;
   }
   const points = state.online ? ownAnswer?.points || 0 : state.lastPoints;
@@ -449,6 +464,41 @@ function redrawOverlay() {
 
 function shouldRevealAnswer() {
   return Boolean(state.target && (state.roundComplete || (!state.online && state.answered)));
+}
+
+function isSelectedFeature(feature) {
+  const selectedNames = state.online
+    ? Object.values(state.answers || {}).map((answer) => answer.country)
+    : [state.selectedCountry];
+  const clicked = normalizeName(getFeatureName(feature));
+  return selectedNames.some((name) => normalizeName(name) === clicked);
+}
+
+function recapHtml() {
+  const rows = state.online ? onlineRecapRows() : localRecapRows();
+  return `
+    <div class="recap-panel">
+      <strong>Réponse : ${escapeHtml(state.target.name)}</strong>
+      <div class="recap-list">${rows}</div>
+    </div>
+  `;
+}
+
+function onlineRecapRows() {
+  return state.players.map((player) => {
+    const answer = state.answers?.[player.id];
+    const country = answer?.country || "Temps écoulé";
+    const points = answer?.points || 0;
+    const mark = points > 0 ? "✓" : "×";
+    return `<span class="${points > 0 ? "is-good" : "is-bad"}">${mark} ${escapeHtml(player.name)} : ${escapeHtml(country)} · +${points}</span>`;
+  }).join("");
+}
+
+function localRecapRows() {
+  const player = state.players[state.turn];
+  const country = state.selectedCountry || "Temps écoulé";
+  const mark = state.lastPoints > 0 ? "✓" : "×";
+  return `<span class="${state.lastPoints > 0 ? "is-good" : "is-bad"}">${mark} ${escapeHtml(player?.name || "Joueur")} : ${escapeHtml(country)} · +${state.lastPoints}</span>`;
 }
 
 function pointsText() {
@@ -523,9 +573,11 @@ function restoreState() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
     if (!saved) return;
-    state.players = saved.players?.length ? saved.players : state.players;
+    const savedName = saved.playerName || saved.players?.[0]?.name;
+    if (savedName) state.players = [{ id: onlinePlayerId, name: savedName, score: 0 }];
     state.modes = saved.modes?.length ? saved.modes : state.modes;
     state.rounds = saved.rounds || state.rounds;
+    if (savedName) els.playerName.value = savedName;
   } catch {
     localStorage.removeItem(STORAGE_KEY);
   }
@@ -534,6 +586,7 @@ function restoreState() {
 function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
     players: state.players,
+    playerName: ownOnlineName(),
     modes: state.modes,
     rounds: state.rounds
   }));
@@ -756,7 +809,11 @@ function applyOnlineRound(data) {
   state.selectedCountry = ownAnswer?.country || null;
   state.lastPoints = ownAnswer?.points || 0;
   renderAll();
-  if (!state.roundComplete) tickTimer();
+  if (state.roundComplete) {
+    clearInterval(state.timerId);
+  } else {
+    tickTimer();
+  }
   if (isHost) maybeHostAdvance(data);
 }
 
@@ -800,12 +857,34 @@ async function submitOnlineAnswer(country, correct, points) {
 
 function maybeHostAdvance(data) {
   if (!isRoundComplete(data)) return;
+  if (!data.round.revealAt) {
+    markRoundReveal(data);
+    return;
+  }
   scheduleHostAdvance(data);
+}
+
+async function markRoundReveal(data) {
+  if (!isHost || !state.roomId || !data?.round || hostAdvanceTimer) return;
+  const revealAt = Date.now();
+  hostAdvanceTimer = window.setTimeout(async () => {
+    hostAdvanceTimer = null;
+    await hostAdvanceOnlineRoom(data.round.index);
+  }, ROUND_RECAP_MS);
+  try {
+    await window.GeoDuelFirebase.putPath(state.roomId, "/round/revealAt", revealAt);
+    await window.GeoDuelFirebase.patchRoom(state.roomId, { updatedAt: revealAt });
+  } catch (error) {
+    hostAdvanceTimer = null;
+    setOnlineMessage("Récap non synchronisé");
+    setRoomHelp("Firebase a refusé la phase de récap. Vérifie les règles Realtime Database.");
+    console.warn(error);
+  }
 }
 
 function scheduleHostAdvance(data = roomData) {
   if (!isHost || !data?.round || hostAdvanceTimer) return;
-  const delay = data.round.revealAt ? Math.max(250, data.round.revealAt + ROUND_REVEAL_MS - Date.now()) : ROUND_REVEAL_MS;
+  const delay = Math.max(250, (data.round.revealAt || Date.now()) + ROUND_RECAP_MS - Date.now());
   hostAdvanceTimer = window.setTimeout(async () => {
     hostAdvanceTimer = null;
     await hostAdvanceOnlineRoom(data.round.index);
@@ -817,6 +896,10 @@ async function hostAdvanceOnlineRoom(expectedRoundIndex) {
   const latest = normalizeRoom(await window.GeoDuelFirebase.getRoom(state.roomId));
   if (!latest || latest.status !== "playing" || latest.round?.index !== expectedRoundIndex) return;
   if (!isRoundComplete(latest)) return;
+  if (!latest.round.revealAt || Date.now() < latest.round.revealAt + ROUND_RECAP_MS) {
+    maybeHostAdvance(latest);
+    return;
+  }
 
   if ((latest.roundIndex || latest.round.index) >= latest.settings.rounds) {
     await window.GeoDuelFirebase.patchRoom(state.roomId, { status: "results", updatedAt: Date.now() });

@@ -529,6 +529,10 @@ input[type="checkbox"] {
   fill: var(--land-hover);
 }
 
+.country.is-selected {
+  fill: var(--coral);
+}
+
 .country.is-answer {
   fill: var(--land-answer);
 }
@@ -557,6 +561,47 @@ input[type="checkbox"] {
   text-align: center;
   transform: translateX(-50%);
   width: max-content;
+}
+
+.feedback.is-recap {
+  max-width: min(860px, calc(100% - 32px));
+  width: min(860px, calc(100% - 32px));
+}
+
+.recap-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.recap-panel > strong {
+  color: var(--land-answer);
+  font-size: 16px;
+}
+
+.recap-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+}
+
+.recap-list span {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 800;
+  padding: 6px 8px;
+}
+
+.recap-list .is-good {
+  border-color: rgba(103, 213, 154, 0.6);
+  color: var(--land-answer);
+}
+
+.recap-list .is-bad {
+  border-color: rgba(242, 105, 75, 0.58);
+  color: #ffd2c8;
 }
 
 .map-zoom {
