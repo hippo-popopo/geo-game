@@ -27,6 +27,7 @@ const state = {
   endsAt: 0,
   usedTargets: [],
   answers: {},
+  responses: {},
   lastPoints: 0,
   roomId: null,
   online: false,
@@ -88,6 +89,7 @@ let hostAdvanceTimer = null;
 let roomData = null;
 let isHost = false;
 let renderedScreen = null;
+let pendingOnlineAnswer = null;
 
 restoreState();
 bindEvents();
@@ -237,7 +239,9 @@ function returnToSetup() {
   state.roomId = null;
   state.online = false;
   state.answers = {};
+  state.responses = {};
   state.round = 0;
+  pendingOnlineAnswer = null;
   const cleanUrl = new URL(location.href);
   cleanUrl.searchParams.delete("room");
   history.replaceState({}, "", cleanUrl);
@@ -263,6 +267,7 @@ function startNextTurn() {
   state.answered = false;
   state.roundComplete = false;
   state.answers = {};
+  state.responses = {};
   state.endsAt = Date.now() + MAX_SECONDS * 1000;
   state.lastPoints = possiblePoints();
   renderAll();
@@ -467,7 +472,7 @@ function shouldRevealAnswer() {
 }
 
 function isSelectedFeature(feature) {
-  const selectedNames = state.online
+  const selectedNames = state.online && state.roundComplete
     ? Object.values(state.answers || {}).map((answer) => answer.country)
     : [state.selectedCountry];
   const clicked = normalizeName(getFeatureName(feature));
@@ -487,10 +492,12 @@ function recapHtml() {
 function onlineRecapRows() {
   return state.players.map((player) => {
     const answer = state.answers?.[player.id];
+    const response = state.responses?.[player.id];
     const country = answer?.country || "Temps écoulé";
     const points = answer?.points || 0;
     const mark = points > 0 ? "✓" : "×";
-    return `<span class="${points > 0 ? "is-good" : "is-bad"}">${mark} ${escapeHtml(player.name)} : ${escapeHtml(country)} · +${points}</span>`;
+    const time = answer?.elapsedMs || response?.elapsedMs;
+    return `<span class="${points > 0 ? "is-good" : "is-bad"}">${mark} ${escapeHtml(player.name)} : ${escapeHtml(country)} · ${formatElapsed(time)} · +${points}</span>`;
   }).join("");
 }
 
@@ -498,12 +505,14 @@ function localRecapRows() {
   const player = state.players[state.turn];
   const country = state.selectedCountry || "Temps écoulé";
   const mark = state.lastPoints > 0 ? "✓" : "×";
-  return `<span class="${state.lastPoints > 0 ? "is-good" : "is-bad"}">${mark} ${escapeHtml(player?.name || "Joueur")} : ${escapeHtml(country)} · +${state.lastPoints}</span>`;
+  const elapsed = state.answered && state.endsAt ? answerElapsedMs(Date.now(), state.endsAt) : null;
+  return `<span class="${state.lastPoints > 0 ? "is-good" : "is-bad"}">${mark} ${escapeHtml(player?.name || "Joueur")} : ${escapeHtml(country)} · ${formatElapsed(elapsed)} · +${state.lastPoints}</span>`;
 }
 
 function pointsText() {
   const ownAnswer = state.answers?.[onlinePlayerId];
-  if (state.online && ownAnswer) return `Réponse envoyée : +${ownAnswer.points} pts`;
+  if (state.online && ownAnswer && state.roundComplete) return `Réponse révélée : +${ownAnswer.points} pts`;
+  if (state.online && state.answered) return "Réponse envoyée";
   if (!state.online && state.answered) return `+${state.lastPoints} pts`;
   return `Score possible : ${possiblePoints()} pts`;
 }
@@ -514,6 +523,14 @@ function possiblePoints() {
 
 function secondsLeft() {
   return state.endsAt ? Math.max(0, (state.endsAt - Date.now()) / 1000) : MAX_SECONDS;
+}
+
+function answerElapsedMs(answeredAt, endsAt) {
+  return clamp(Math.round(MAX_SECONDS * 1000 - Math.max(0, endsAt - answeredAt)), 0, MAX_SECONDS * 1000);
+}
+
+function formatElapsed(elapsedMs) {
+  return Number.isFinite(elapsedMs) ? `${(elapsedMs / 1000).toFixed(1)}s` : "timeout";
 }
 
 function buildRound(index, usedTargets = []) {
@@ -530,6 +547,8 @@ function buildRound(index, usedTargets = []) {
       promptMode,
       endsAt: Date.now() + MAX_SECONDS * 1000,
       answers: {},
+      responses: {},
+      revealedAnswers: {},
       revealAt: 0
     }
   };
@@ -546,6 +565,8 @@ function buildOnlineRound(index, usedTargets = [], modes = state.modes) {
       promptMode: sample(modes),
       endsAt: Date.now() + MAX_SECONDS * 1000,
       answers: {},
+      responses: {},
+      revealedAnswers: {},
       revealAt: 0
     }
   };
@@ -719,6 +740,8 @@ function normalizeRoom(data) {
         promptMode: data.state.promptMode || "name",
         endsAt: data.state.endsAt || 0,
         answers: data.state.answers || {},
+        responses: data.state.responses || data.state.answers || {},
+        revealedAnswers: data.state.answers || {},
         revealAt: data.state.answered ? Date.now() : 0
       } : null
     };
@@ -732,12 +755,18 @@ function normalizeRoom(data) {
     },
     players: data.players || {},
     usedTargets: data.usedTargets || [],
-    round: data.round || null
+    round: data.round ? {
+      ...data.round,
+      responses: data.round.responses || data.round.answers || {},
+      revealedAnswers: data.round.revealedAnswers || data.round.answers || {},
+      answers: data.round.answers || data.round.revealedAnswers || {}
+    } : null
   };
 }
 
 async function launchOnlineGame() {
   if (!state.roomId || !isHost) return;
+  pendingOnlineAnswer = null;
   const settings = { modes: state.modes, rounds: state.rounds };
   const players = Object.fromEntries(playersFromRoom(roomData).map((player) => [player.id, { name: player.name, score: 0, joinedAt: roomData?.players?.[player.id]?.joinedAt || Date.now() }]));
   const next = buildOnlineRound(1, [], settings.modes);
@@ -792,7 +821,10 @@ function applyRoomData(data) {
 
 function applyOnlineRound(data) {
   const round = data.round;
-  const ownAnswer = round.answers?.[onlinePlayerId] || null;
+  const revealStarted = Boolean(round.revealAt);
+  const ownResponse = round.responses?.[onlinePlayerId] || null;
+  const ownRevealedAnswer = round.revealedAnswers?.[onlinePlayerId] || null;
+  const ownPendingAnswer = pendingOnlineAnswer?.roundIndex === round.index ? pendingOnlineAnswer : null;
   state.screen = "game";
   state.started = true;
   state.modes = data.settings.modes;
@@ -803,12 +835,19 @@ function applyOnlineRound(data) {
   state.promptMode = round.promptMode;
   state.endsAt = round.endsAt;
   state.usedTargets = data.usedTargets || [];
-  state.answers = round.answers || {};
-  state.answered = Boolean(ownAnswer);
-  state.roundComplete = isRoundComplete(data);
-  state.selectedCountry = ownAnswer?.country || null;
-  state.lastPoints = ownAnswer?.points || 0;
+  state.responses = {
+    ...(round.responses || {}),
+    ...(ownPendingAnswer ? { [onlinePlayerId]: publicResponseFromAnswer(ownPendingAnswer) } : {})
+  };
+  state.answers = revealStarted
+    ? { ...(round.revealedAnswers || {}), ...(ownPendingAnswer && !ownRevealedAnswer ? { [onlinePlayerId]: ownPendingAnswer } : {}) }
+    : (ownPendingAnswer ? { [onlinePlayerId]: ownPendingAnswer } : {});
+  state.answered = Boolean(ownResponse || ownPendingAnswer || ownRevealedAnswer);
+  state.roundComplete = revealStarted;
+  state.selectedCountry = revealStarted ? (ownRevealedAnswer || ownPendingAnswer)?.country || null : ownPendingAnswer?.country || null;
+  state.lastPoints = revealStarted ? (ownRevealedAnswer || ownPendingAnswer)?.points || 0 : ownPendingAnswer?.points || 0;
   renderAll();
+  if (revealStarted) publishOwnReveal(round);
   if (state.roundComplete) {
     clearInterval(state.timerId);
   } else {
@@ -832,21 +871,24 @@ function ownOnlineName() {
 
 async function submitOnlineAnswer(country, correct, points) {
   if (!state.roomId || !roomData?.round) return;
+  const answeredAt = Date.now();
   const answer = {
     playerId: onlinePlayerId,
+    roundIndex: roomData.round.index,
     country,
     correct,
     points,
-    answeredAt: Date.now()
+    answeredAt,
+    elapsedMs: answerElapsedMs(answeredAt, roomData.round.endsAt)
   };
+  const response = publicResponseFromAnswer(answer);
+  pendingOnlineAnswer = answer;
   state.answers = { ...(state.answers || {}), [onlinePlayerId]: answer };
+  state.responses = { ...(state.responses || {}), [onlinePlayerId]: response };
   state.answered = true;
-  state.players = state.players.map((player) => player.id === onlinePlayerId ? { ...player, score: player.score + points } : player);
   renderAll();
   try {
-    const ownScore = state.players.find((player) => player.id === onlinePlayerId)?.score || 0;
-    await window.GeoDuelFirebase.putPath(state.roomId, `/round/answers/${onlinePlayerId}`, answer);
-    await window.GeoDuelFirebase.putPath(state.roomId, `/players/${onlinePlayerId}/score`, ownScore);
+    await window.GeoDuelFirebase.putPath(state.roomId, `/round/responses/${onlinePlayerId}`, response);
     await window.GeoDuelFirebase.patchRoom(state.roomId, { updatedAt: Date.now() });
   } catch (error) {
     setOnlineMessage("Réponse non envoyée");
@@ -855,8 +897,31 @@ async function submitOnlineAnswer(country, correct, points) {
   }
 }
 
+function publicResponseFromAnswer(answer) {
+  return {
+    playerId: answer.playerId,
+    answeredAt: answer.answeredAt,
+    elapsedMs: answer.elapsedMs
+  };
+}
+
+async function publishOwnReveal(round) {
+  if (!state.roomId || !pendingOnlineAnswer || pendingOnlineAnswer.roundIndex !== round.index) return;
+  if (round.revealedAnswers?.[onlinePlayerId]) return;
+  try {
+    await window.GeoDuelFirebase.putPath(state.roomId, `/round/revealedAnswers/${onlinePlayerId}`, pendingOnlineAnswer);
+    const currentScore = roomData?.players?.[onlinePlayerId]?.score || 0;
+    await window.GeoDuelFirebase.putPath(state.roomId, `/players/${onlinePlayerId}/score`, currentScore + pendingOnlineAnswer.points);
+    await window.GeoDuelFirebase.patchRoom(state.roomId, { updatedAt: Date.now() });
+  } catch (error) {
+    setOnlineMessage("Révélation non envoyée");
+    setRoomHelp("Firebase a refusé la révélation de ta réponse. Vérifie les règles Realtime Database.");
+    console.warn(error);
+  }
+}
+
 function maybeHostAdvance(data) {
-  if (!isRoundComplete(data)) return;
+  if (!isRoundReady(data)) return;
   if (!data.round.revealAt) {
     markRoundReveal(data);
     return;
@@ -895,7 +960,7 @@ async function hostAdvanceOnlineRoom(expectedRoundIndex) {
   if (!isHost || !state.roomId) return;
   const latest = normalizeRoom(await window.GeoDuelFirebase.getRoom(state.roomId));
   if (!latest || latest.status !== "playing" || latest.round?.index !== expectedRoundIndex) return;
-  if (!isRoundComplete(latest)) return;
+  if (!isRoundReady(latest)) return;
   if (!latest.round.revealAt || Date.now() < latest.round.revealAt + ROUND_RECAP_MS) {
     maybeHostAdvance(latest);
     return;
@@ -916,16 +981,16 @@ async function hostAdvanceOnlineRoom(expectedRoundIndex) {
   });
 }
 
-function isRoundComplete(data) {
+function isRoundReady(data) {
   const round = data?.round;
   if (!round) return false;
-  const answers = Object.keys(round.answers || {}).length;
+  const answers = Object.keys(round.responses || {}).length;
   const players = Object.keys(data.players || {}).length;
   return (players > 0 && answers >= players) || Date.now() >= round.endsAt;
 }
 
 function answeredCount() {
-  return Object.keys(state.answers || {}).length;
+  return Object.keys(state.responses || {}).length;
 }
 
 function updateRoomUrl(roomId) {
