@@ -20,13 +20,25 @@ Puis ouvrir `http://localhost:5174/geo-duel/`.
 
 ## Pret pour Firebase
 
-Le fichier `firebase-adapter.js` isole le futur branchement online.
-Quand la config Firebase sera disponible, copier `firebase-config.example.js` en `firebase-config.js`, ajouter le SDK Firebase, puis brancher :
+Le fichier `firebase-adapter.js` utilise la Realtime Database :
+
+```text
+https://geo-game-4f27f-default-rtdb.europe-west1.firebasedatabase.app/
+```
+
+Les rooms online fonctionnent avec un lien du type `?room=ABCD`.
+
+Deja branche :
 
 - creation/rejoindre une room ;
 - synchronisation de l'etat de partie ;
+- lien partageable ;
+- reprise automatique d'une room depuis l'URL.
+
+Encore a durcir avant publication large :
+
 - presence des joueurs ;
-- validation serveur ou Firestore rules pour limiter la triche.
+- validation serveur ou regles plus strictes pour limiter la triche.
 
 ## Deploiement Firebase Hosting
 
@@ -42,6 +54,14 @@ firebase deploy
 ```
 
 Le fichier `firebase.json` est deja pret pour servir le dossier courant.
+
+Pour activer les rooms online, ouvrir l'onglet Rules de la Realtime Database et coller le contenu de `database.rules.json`, ou lancer :
+
+```bash
+firebase deploy --only database
+```
+
+Ces regles sont volontairement ouvertes pour le prototype. Avant une vraie mise en public, il faudra ajouter une limite de taille, une expiration des rooms et une validation plus stricte.
 
 ## Asset GPT Image
 

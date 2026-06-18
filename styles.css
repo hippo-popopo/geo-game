@@ -270,6 +270,19 @@ h3 {
   grid-template-columns: 1fr 44px;
 }
 
+.room-actions {
+  display: grid;
+  gap: 9px;
+  margin-top: 12px;
+}
+
+.room-share {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr 84px;
+  margin-top: 9px;
+}
+
 input {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -452,7 +465,8 @@ input {
   }
 
   .toggles,
-  .action-panel {
+  .action-panel,
+  .room-share {
     grid-template-columns: 1fr;
   }
 

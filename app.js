@@ -25,7 +25,10 @@ const state = {
   started: false,
   endsAt: 0,
   timerId: null,
-  usedTargets: []
+  usedTargets: [],
+  roomId: null,
+  online: false,
+  lastRemoteUpdate: 0
 };
 
 const els = {
@@ -39,6 +42,13 @@ const els = {
   playerCount: document.querySelector("#playerCount"),
   addPlayerForm: document.querySelector("#addPlayerForm"),
   playerName: document.querySelector("#playerName"),
+  createRoom: document.querySelector("#createRoom"),
+  joinRoomForm: document.querySelector("#joinRoomForm"),
+  roomCode: document.querySelector("#roomCode"),
+  onlineStatus: document.querySelector("#onlineStatus"),
+  roomShare: document.querySelector("#roomShare"),
+  roomLink: document.querySelector("#roomLink"),
+  copyRoomLink: document.querySelector("#copyRoomLink"),
   modeSummary: document.querySelector("#modeSummary"),
   modeInputs: document.querySelectorAll(".toggles input"),
   roundsInput: document.querySelector("#roundsInput"),
@@ -56,15 +66,21 @@ let path = d3.geoPath(projection);
 let countriesGroup;
 let overlayGroup;
 let countryFeatures = [];
+let unsubscribeRoom = null;
+let suppressPublish = false;
 
 restoreState();
 renderPlayers();
 renderSetup();
 renderScoreboard();
 loadMap();
+autoJoinRoomFromUrl();
 
 window.addEventListener("resize", () => drawMap(countryFeatures));
 els.addPlayerForm.addEventListener("submit", addPlayer);
+els.createRoom.addEventListener("click", createOnlineRoom);
+els.joinRoomForm.addEventListener("submit", joinOnlineRoom);
+els.copyRoomLink.addEventListener("click", copyRoomLink);
 els.startGame.addEventListener("click", startGame);
 els.nextRound.addEventListener("click", nextRound);
 els.roundsInput.addEventListener("change", () => {
@@ -83,6 +99,7 @@ els.modeInputs.forEach((input) => {
     state.modes = selected;
     saveState();
     renderSetup();
+    syncState();
   });
 });
 
@@ -149,6 +166,8 @@ function addPlayer(event) {
   saveState();
   renderPlayers();
   renderScoreboard();
+  renderSetup();
+  syncState();
 }
 
 function startGame() {
@@ -162,6 +181,7 @@ function startGame() {
   state.started = true;
   els.startGame.textContent = "Recommencer";
   nextRound();
+  syncState();
 }
 
 function nextRound() {
@@ -197,6 +217,7 @@ function nextRound() {
   renderScoreboard();
   redrawOverlay();
   tickTimer();
+  syncState();
 }
 
 function placeGuess([lon, lat]) {
@@ -214,6 +235,7 @@ function placeGuess([lon, lat]) {
   els.feedback.textContent = `${state.target.name} etait la bonne reponse. ${scoreMessage(distance)}`;
   renderScoreboard();
   redrawOverlay();
+  syncState();
 }
 
 function tickTimer() {
@@ -230,6 +252,7 @@ function tickTimer() {
       els.pointsLabel.textContent = "+0";
       els.feedback.textContent = `${state.target.name} etait la bonne reponse. Trop tard, mais on repart.`;
       redrawOverlay();
+      syncState();
     }
   }, 100);
 }
@@ -248,6 +271,7 @@ function finishGame() {
   renderSetup();
   renderScoreboard();
   redrawOverlay();
+  syncState();
 }
 
 function renderPrompt() {
@@ -279,6 +303,7 @@ function renderPlayers() {
       renderPlayers();
       renderScoreboard();
       renderSetup();
+      syncState();
     });
     els.playersList.appendChild(row);
   });
@@ -293,6 +318,7 @@ function renderSetup() {
   els.modeInputs.forEach((input) => {
     input.checked = state.modes.includes(input.value);
   });
+  renderOnlineStatus();
   saveState();
 }
 
@@ -345,6 +371,7 @@ function restoreState() {
     state.players = saved.players?.length ? saved.players : state.players;
     state.modes = saved.modes?.length ? saved.modes : state.modes;
     state.rounds = saved.rounds || state.rounds;
+    state.roomId = saved.roomId || null;
   } catch {
     localStorage.removeItem(STORAGE_KEY);
   }
@@ -354,8 +381,180 @@ function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
     players: state.players,
     modes: state.modes,
-    rounds: state.rounds
+    rounds: state.rounds,
+    roomId: state.roomId
   }));
+}
+
+async function createOnlineRoom() {
+  setOnlineMessage("Création...");
+  try {
+    const roomId = window.GeoDuelFirebase.makeRoomId();
+    state.roomId = await window.GeoDuelFirebase.createRoom(roomId, serializeState());
+    state.online = true;
+    updateRoomUrl(state.roomId);
+    subscribeToRoom(state.roomId);
+    renderSetup();
+    setOnlineMessage(`Room ${state.roomId}`);
+  } catch (error) {
+    setOnlineMessage("Erreur Firebase");
+    els.feedback.textContent = "Impossible de créer la room. Vérifie les règles Realtime Database.";
+  }
+}
+
+async function joinOnlineRoom(event) {
+  event?.preventDefault();
+  const roomId = window.GeoDuelFirebase.cleanRoomId(els.roomCode.value || new URLSearchParams(location.search).get("room"));
+  if (!roomId) return;
+  setOnlineMessage("Connexion...");
+  try {
+    const room = await window.GeoDuelFirebase.joinRoom(roomId);
+    if (!room) {
+      setOnlineMessage("Room introuvable");
+      return;
+    }
+    state.roomId = roomId;
+    state.online = true;
+    applyRemoteState(room.state, room.updatedAt);
+    updateRoomUrl(roomId);
+    subscribeToRoom(roomId);
+    renderSetup();
+    setOnlineMessage(`Room ${roomId}`);
+  } catch (error) {
+    setOnlineMessage("Erreur Firebase");
+    els.feedback.textContent = "Impossible de rejoindre la room. Vérifie que la database accepte les lectures publiques.";
+  }
+}
+
+function autoJoinRoomFromUrl() {
+  const roomId = window.GeoDuelFirebase.cleanRoomId(new URLSearchParams(location.search).get("room"));
+  if (!roomId) {
+    renderOnlineStatus();
+    return;
+  }
+  els.roomCode.value = roomId;
+  joinOnlineRoom();
+}
+
+function subscribeToRoom(roomId) {
+  unsubscribeRoom?.();
+  unsubscribeRoom = window.GeoDuelFirebase.subscribe(roomId, (remoteState, updatedAt, error) => {
+    if (error) {
+      setOnlineMessage("Sync en attente");
+      return;
+    }
+    if (!remoteState || updatedAt <= state.lastRemoteUpdate) return;
+    applyRemoteState(remoteState, updatedAt);
+  });
+}
+
+async function syncState() {
+  if (!state.online || !state.roomId || suppressPublish) return;
+  try {
+    state.lastRemoteUpdate = await window.GeoDuelFirebase.publishState(state.roomId, serializeState());
+    setOnlineMessage(`Room ${state.roomId}`);
+  } catch (error) {
+    setOnlineMessage("Sync échouée");
+  }
+}
+
+function serializeState() {
+  return {
+    players: state.players,
+    modes: state.modes,
+    rounds: state.rounds,
+    round: state.round,
+    turn: state.turn,
+    target: state.target,
+    promptMode: state.promptMode,
+    guess: state.guess,
+    answered: state.answered,
+    started: state.started,
+    endsAt: state.endsAt,
+    usedTargets: state.usedTargets
+  };
+}
+
+function applyRemoteState(remoteState, updatedAt = Date.now()) {
+  suppressPublish = true;
+  clearInterval(state.timerId);
+  Object.assign(state, {
+    players: remoteState.players?.length ? remoteState.players : state.players,
+    modes: remoteState.modes?.length ? remoteState.modes : state.modes,
+    rounds: remoteState.rounds || state.rounds,
+    round: remoteState.round || 0,
+    turn: remoteState.turn || 0,
+    target: remoteState.target || null,
+    promptMode: remoteState.promptMode || "name",
+    guess: remoteState.guess || null,
+    answered: Boolean(remoteState.answered),
+    started: Boolean(remoteState.started),
+    endsAt: remoteState.endsAt || 0,
+    usedTargets: remoteState.usedTargets || []
+  });
+  state.lastRemoteUpdate = updatedAt;
+  if (state.target) {
+    renderPrompt();
+  } else if (!state.started) {
+    els.promptTitle.textContent = "Pret ?";
+    els.promptHint.textContent = "Ajoute des joueurs, choisis les modes, puis lance une partie.";
+  }
+  els.startGame.textContent = state.started ? "Recommencer" : "Lancer";
+  els.nextRound.disabled = !state.answered || !state.started;
+  if (state.guess) {
+    els.distanceLabel.textContent = `${Math.round(state.guess.distance)} km`;
+    els.pointsLabel.textContent = `+${state.guess.points}`;
+    els.feedback.textContent = `${state.target.name} etait la bonne reponse. ${scoreMessage(state.guess.distance)}`;
+  } else if (state.answered && state.target) {
+    els.distanceLabel.textContent = "Temps ecoule";
+    els.pointsLabel.textContent = "+0";
+    els.feedback.textContent = `${state.target.name} etait la bonne reponse. Trop tard, mais on repart.`;
+  } else {
+    els.distanceLabel.textContent = "-";
+    els.pointsLabel.textContent = "-";
+    els.feedback.textContent = state.started ? "Clique sur la carte pour placer ton marqueur." : "Clique sur la carte pour placer ton marqueur.";
+  }
+  renderPlayers();
+  renderSetup();
+  renderScoreboard();
+  redrawOverlay();
+  if (state.started && !state.answered && state.target) tickTimer();
+  suppressPublish = false;
+}
+
+function updateRoomUrl(roomId) {
+  const url = new URL(location.href);
+  url.searchParams.set("room", roomId);
+  history.replaceState({}, "", url);
+  els.roomLink.value = url.href;
+}
+
+async function copyRoomLink() {
+  const link = els.roomLink.value;
+  if (!link) return;
+  try {
+    await navigator.clipboard.writeText(link);
+    setOnlineMessage("Lien copié");
+  } catch {
+    els.roomLink.select();
+    setOnlineMessage("Lien prêt");
+  }
+}
+
+function renderOnlineStatus() {
+  if (state.roomId) {
+    els.onlineStatus.textContent = state.online ? `Room ${state.roomId}` : "Room sauvegardée";
+    els.roomShare.classList.remove("hidden");
+    updateRoomUrl(state.roomId);
+  } else {
+    els.onlineStatus.textContent = "Local";
+    els.roomShare.classList.add("hidden");
+    els.roomLink.value = "";
+  }
+}
+
+function setOnlineMessage(message) {
+  els.onlineStatus.textContent = message;
 }
 
 function haversineKm(lat1, lon1, lat2, lon2) {
