@@ -1,5 +1,5 @@
 const WORLD_GEOJSON_URL = "https://raw.githubusercontent.com/holtzy/D3-graph-gallery/master/DATA/world.geojson";
-const STORAGE_KEY = "geo-duel-state-v2";
+const STORAGE_KEY = "geo-duel-state-v3";
 const MAX_SECONDS = 20;
 const BASE_POINTS = 100;
 const SPEED_MULTIPLIER = 10;
@@ -417,7 +417,6 @@ function restoreState() {
     state.players = saved.players?.length ? saved.players : state.players;
     state.modes = saved.modes?.length ? saved.modes : state.modes;
     state.rounds = saved.rounds || state.rounds;
-    state.roomId = saved.roomId || null;
   } catch {
     localStorage.removeItem(STORAGE_KEY);
   }
@@ -427,8 +426,7 @@ function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
     players: state.players,
     modes: state.modes,
-    rounds: state.rounds,
-    roomId: state.roomId
+    rounds: state.rounds
   }));
 }
 

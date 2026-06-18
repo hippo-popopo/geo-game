@@ -73,8 +73,7 @@ window.GeoDuelFirebase = {
   async joinRoom(roomId) {
     if (!this.enabled) throw new Error("Ajoute l'URL Firebase dans firebase-config.js.");
     const cleanId = this.cleanRoomId(roomId);
-    const room = await requestJson(roomUrl(cleanId));
-    return room ? { roomId: cleanId, state: room.state, updatedAt: room.updatedAt || 0 } : null;
+    return requestJson(roomUrl(cleanId));
   },
   async publishState(roomId, state) {
     if (!this.enabled) throw new Error("Ajoute l'URL Firebase dans firebase-config.js.");
