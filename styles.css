@@ -604,6 +604,11 @@ input[type="checkbox"] {
   color: #ffd2c8;
 }
 
+.recap-list .is-pending {
+  border-color: rgba(255, 255, 255, 0.24);
+  color: var(--muted);
+}
+
 .map-zoom {
   display: flex;
   gap: 6px;

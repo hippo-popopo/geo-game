@@ -1,4 +1,4 @@
-const WORLD_GEOJSON_URL = "https://raw.githubusercontent.com/holtzy/D3-graph-gallery/master/DATA/world.geojson";
+const WORLD_GEOJSON_URL = "./assets/world-countries.geojson";
 const STORAGE_KEY = "geo-duel-state-v4";
 const MAX_SECONDS = 20;
 const BASE_POINTS = 100;
@@ -493,6 +493,9 @@ function onlineRecapRows() {
   return state.players.map((player) => {
     const answer = state.answers?.[player.id];
     const response = state.responses?.[player.id];
+    if (!answer && response) {
+      return `<span class="is-pending">• ${escapeHtml(player.name)} : révélation... · ${formatElapsed(response.elapsedMs)}</span>`;
+    }
     const country = answer?.country || "Temps écoulé";
     const points = answer?.points || 0;
     const mark = points > 0 ? "✓" : "×";
